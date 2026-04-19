@@ -7,10 +7,15 @@ types.setTypeParser(1700, (val) => parseFloat(val));
 // Create connection pool
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }, // Force SSL for all environments (required by Supabase)
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  ssl: { rejectUnauthorized: false }, 
+  max: 10, // Reduced for serverless concurrency
+  idleTimeoutMillis: 10000,
+  connectionTimeoutMillis: 10000, // Increased to 10s for Vercel cold starts
+});
+
+// Log pool errors to catch silent connection drops
+pool.on('error', (err) => {
+  console.error('❌ Unexpected database pool error:', err);
 });
 
 // Test database connection

@@ -1,4 +1,15 @@
 require('dotenv').config();
+
+// Global error handlers for debugging silent crashes in Serverless environments
+process.on('uncaughtException', (err) => {
+  console.error('🔥 UNCAUGHT EXCEPTION:', err.message);
+  console.error(err.stack);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('🔥 UNHANDLED REJECTION at:', promise, 'reason:', reason);
+});
+
 const express = require('express');
 const cors = require('cors');
 const { v7: uuidv7 } = require('uuid');
@@ -25,6 +36,31 @@ app.get('/health', async (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// Diagnostic endpoint
+app.get('/api/debug', async (req, res) => {
+  const dbUrl = process.env.DATABASE_URL;
+  const dbStatus = await database.testConnection();
+  
+  res.status(200).json({
+    status: 'debug_info',
+    env: {
+      NODE_ENV: process.env.NODE_ENV,
+      DATABASE_URL_PRESENT: !!dbUrl,
+      DATABASE_URL_LENGTH: dbUrl ? dbUrl.length : 0,
+      DATABASE_URL_START: dbUrl ? dbUrl.substring(0, 15) + '...' : 'none'
+    },
+    database: {
+      connected: dbStatus
+    },
+    uuid_test: {
+      working: typeof uuidv7 === 'function',
+      sample: typeof uuidv7 === 'function' ? uuidv7() : 'failed'
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
 
 // Initialize database
 let dbInitialized = false;
