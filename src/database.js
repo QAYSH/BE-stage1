@@ -1,127 +1,175 @@
-const sqlite3 = require('sqlite3').verbose();
-const path = require('path');
+const { Pool, types } = require('pg');
 
-// Create database connection
-const db = new sqlite3.Database(path.join(__dirname, '../profiles.db'));
+// Force DECIMAL (OID 1700) to be returned as float instead of string
+types.setTypeParser(1700, (val) => parseFloat(val));
+
+
+// Create connection pool
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }, // Force SSL for all environments (required by Supabase)
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000,
+});
+
+// Test database connection
+async function testConnection() {
+  try {
+    const client = await pool.connect();
+    console.log('✅ Database connected successfully');
+    client.release();
+    return true;
+  } catch (error) {
+    console.error('❌ Database connection failed:', error.message);
+    return false;
+  }
+}
 
 // Initialize database table
-function initDatabase() {
-  return new Promise((resolve, reject) => {
-    db.run(`
-      CREATE TABLE IF NOT EXISTS profiles (
-        id TEXT PRIMARY KEY,
-        name TEXT UNIQUE NOT NULL,
-        gender TEXT NOT NULL,
-        gender_probability REAL NOT NULL,
-        sample_size INTEGER NOT NULL,
-        age INTEGER NOT NULL,
-        age_group TEXT NOT NULL,
-        country_id TEXT NOT NULL,
-        country_probability REAL NOT NULL,
-        created_at TEXT NOT NULL
-      )
-    `, (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
+async function initDatabase() {
+  const query = `
+    CREATE TABLE IF NOT EXISTS profiles (
+      id TEXT PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      gender TEXT NOT NULL,
+      gender_probability DECIMAL(10, 2) NOT NULL,
+      sample_size INTEGER NOT NULL,
+      age INTEGER NOT NULL,
+      age_group TEXT NOT NULL,
+      country_id TEXT NOT NULL,
+      country_probability DECIMAL(10, 2) NOT NULL,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL
+    )
+  `;
+  
+  try {
+    await pool.query(query);
+    console.log('✅ Database table initialized');
+  } catch (error) {
+    console.error('❌ Failed to initialize database:', error.message);
+    throw error;
+  }
 }
 
 // Save profile to database
 async function saveProfile(profile) {
-  return new Promise((resolve, reject) => {
-    const sql = `
-      INSERT INTO profiles (
-        id, name, gender, gender_probability, sample_size,
-        age, age_group, country_id, country_probability, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `;
-    
-    db.run(sql, [
-      profile.id,
-      profile.name,
-      profile.gender,
-      profile.gender_probability,
-      profile.sample_size,
-      profile.age,
-      profile.age_group,
-      profile.country_id,
-      profile.country_probability,
-      profile.created_at
-    ], function(err) {
-      if (err) reject(err);
-      else resolve(profile);
-    });
-  });
+  const query = `
+    INSERT INTO profiles (
+      id, name, gender, gender_probability, sample_size,
+      age, age_group, country_id, country_probability, created_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    RETURNING *
+  `;
+  
+  const values = [
+    profile.id,
+    profile.name,
+    profile.gender,
+    profile.gender_probability,
+    profile.sample_size,
+    profile.age,
+    profile.age_group,
+    profile.country_id,
+    profile.country_probability,
+    profile.created_at
+  ];
+  
+  try {
+    const result = await pool.query(query, values);
+    return result.rows[0];
+  } catch (error) {
+    if (error.code === '23505') {
+      return null;
+    }
+    throw error;
+  }
 }
 
 // Find profile by name
 async function findProfileByName(name) {
-  return new Promise((resolve, reject) => {
-    db.get('SELECT * FROM profiles WHERE name = ?', [name.toLowerCase()], (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
+  const query = 'SELECT * FROM profiles WHERE name = $1';
+  try {
+    const result = await pool.query(query, [name.toLowerCase()]);
+    return result.rows[0];
+  } catch (error) {
+    console.error('Error finding profile by name:', error);
+    return null;
+  }
 }
 
 // Find profile by ID
 async function findProfileById(id) {
-  return new Promise((resolve, reject) => {
-    db.get('SELECT * FROM profiles WHERE id = ?', [id], (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
+  const query = 'SELECT * FROM profiles WHERE id = $1';
+  try {
+    const result = await pool.query(query, [id]);
+    return result.rows[0];
+  } catch (error) {
+    console.error('Error finding profile by ID:', error);
+    return null;
+  }
 }
 
 // Get all profiles with filters
 async function getAllProfiles(filters = {}) {
-  return new Promise((resolve, reject) => {
-    let sql = 'SELECT * FROM profiles WHERE 1=1';
-    const params = [];
-    
-    // Apply filters (case-insensitive)
-    if (filters.gender) {
-      sql += ' AND LOWER(gender) = LOWER(?)';
-      params.push(filters.gender);
-    }
-    
-    if (filters.country_id) {
-      sql += ' AND LOWER(country_id) = LOWER(?)';
-      params.push(filters.country_id);
-    }
-    
-    if (filters.age_group) {
-      sql += ' AND LOWER(age_group) = LOWER(?)';
-      params.push(filters.age_group);
-    }
-    
-    sql += ' ORDER BY created_at DESC';
-    
-    db.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
+  let query = 'SELECT * FROM profiles WHERE 1=1';
+  const values = [];
+  let paramCount = 1;
+  
+  if (filters.gender) {
+    query += ` AND LOWER(gender) = LOWER($${paramCount})`;
+    values.push(filters.gender);
+    paramCount++;
+  }
+  
+  if (filters.country_id) {
+    query += ` AND LOWER(country_id) = LOWER($${paramCount})`;
+    values.push(filters.country_id);
+    paramCount++;
+  }
+  
+  if (filters.age_group) {
+    query += ` AND LOWER(age_group) = LOWER($${paramCount})`;
+    values.push(filters.age_group);
+    paramCount++;
+  }
+  
+  query += ' ORDER BY created_at DESC';
+  
+  try {
+    const result = await pool.query(query, values);
+    return result.rows;
+  } catch (error) {
+    console.error('Error getting all profiles:', error);
+    return [];
+  }
 }
 
 // Delete profile by ID
 async function deleteProfileById(id) {
-  return new Promise((resolve, reject) => {
-    db.run('DELETE FROM profiles WHERE id = ?', [id], function(err) {
-      if (err) reject(err);
-      else resolve(this.changes); // Returns number of deleted rows
-    });
-  });
+  const query = 'DELETE FROM profiles WHERE id = $1 RETURNING id';
+  try {
+    const result = await pool.query(query, [id]);
+    return result.rowCount;
+  } catch (error) {
+    console.error('Error deleting profile:', error);
+    return 0;
+  }
+}
+
+// Close database connection
+async function closeDatabase() {
+  await pool.end();
+  console.log('Database connection closed');
 }
 
 module.exports = {
+  testConnection,
   initDatabase,
   saveProfile,
   findProfileByName,
   findProfileById,
   getAllProfiles,
   deleteProfileById,
-  db
+  closeDatabase
 };

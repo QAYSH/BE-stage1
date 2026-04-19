@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { v7: uuidv7 } = require('uuid');
@@ -15,12 +16,31 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Health check endpoint
+app.get('/health', async (req, res) => {
+  const dbConnected = await database.testConnection();
+  res.status(200).json({ 
+    status: 'ok',
+    database: dbConnected ? 'connected' : 'disconnected',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Initialize database
-database.initDatabase().catch(console.error);
+let dbInitialized = false;
+
+async function initializeDatabase() {
+  if (!dbInitialized) {
+    await database.initDatabase();
+    dbInitialized = true;
+  }
+}
 
 // ========== ENDPOINT 1: Create Profile ==========
 app.post('/api/profiles', async (req, res) => {
   try {
+    await initializeDatabase();
+    
     const { name } = req.body;
     
     // Validate name
@@ -85,6 +105,8 @@ app.post('/api/profiles', async (req, res) => {
 // ========== ENDPOINT 2: Get Single Profile ==========
 app.get('/api/profiles/:id', async (req, res) => {
   try {
+    await initializeDatabase();
+    
     const { id } = req.params;
     
     const profile = await database.findProfileById(id);
@@ -113,6 +135,8 @@ app.get('/api/profiles/:id', async (req, res) => {
 // ========== ENDPOINT 3: Get All Profiles ==========
 app.get('/api/profiles', async (req, res) => {
   try {
+    await initializeDatabase();
+    
     const { gender, country_id, age_group } = req.query;
     
     const filters = {};
@@ -150,6 +174,8 @@ app.get('/api/profiles', async (req, res) => {
 // ========== ENDPOINT 4: Delete Profile ==========
 app.delete('/api/profiles/:id', async (req, res) => {
   try {
+    await initializeDatabase();
+    
     const { id } = req.params;
     
     const deleted = await database.deleteProfileById(id);
@@ -172,11 +198,6 @@ app.delete('/api/profiles/:id', async (req, res) => {
   }
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok' });
-});
-
 // Handle 404
 app.use((req, res) => {
   res.status(404).json({
@@ -185,14 +206,18 @@ app.use((req, res) => {
   });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log('Available endpoints:');
-  console.log('  POST   /api/profiles');
-  console.log('  GET    /api/profiles');
-  console.log('  GET    /api/profiles/:id');
-  console.log('  DELETE /api/profiles/:id');
-});
+// Only start server locally (not on Vercel)
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, async () => {
+    await initializeDatabase();
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log('Available endpoints:');
+    console.log('  POST   /api/profiles');
+    console.log('  GET    /api/profiles');
+    console.log('  GET    /api/profiles/:id');
+    console.log('  DELETE /api/profiles/:id');
+  });
+}
 
+// Export for Vercel
 module.exports = app;
