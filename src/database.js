@@ -13,9 +13,9 @@ const pool = new Pool({
   connectionTimeoutMillis: 10000, // Increased to 10s for Vercel cold starts
 });
 
-// Log pool errors to catch silent connection drops
+// Log pool errors to prevent silent failures
 pool.on('error', (err) => {
-  console.error('❌ Unexpected database pool error:', err);
+  console.error('Database pool error:', err.message);
 });
 
 // Test database connection
